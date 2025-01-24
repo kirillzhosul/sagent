@@ -1,8 +1,10 @@
 from asyncio import Task, create_task, sleep, wait
+from asyncio.exceptions import CancelledError
 from dataclasses import dataclass
 from typing import Any
 
-from .agent import AbstractAgent
+from .agent import AbstractAgent, BasicAgent
+from .executor import AsyncExecutor
 
 
 @dataclass
@@ -13,15 +15,17 @@ class _ExecutedAgent:
 
 
 class Orchestrator:
+    _executor: AsyncExecutor
     _agents_cls: list[tuple[type[AbstractAgent], int]]
     _agent_awaited_tasks: set[Task[Any]]
-    _perform_counter: int
+
     _executed_agents: list[_ExecutedAgent]
 
     def __init__(self) -> None:
+        self._executor = AsyncExecutor()
+
         self._agents_cls = []
         self._agent_awaited_tasks = set()
-        self._perform_counter = 0
         self._executed_agents = []
 
     def register_agent(
@@ -56,10 +60,8 @@ class Orchestrator:
 
         for executed_agent in self._executed_agents:
             for _ in range(executed_agent.task_instances):
-                coro = self.agent_perform_task(executed_agent.agent)
-                task = create_task(coro)
-
                 # Push task to background store with task clearing
+                task = self._executor.agent_executor_task(executed_agent.agent)
                 self._agent_awaited_tasks.add(task)
                 task.add_done_callback(self._agent_awaited_tasks.discard)
 
@@ -74,14 +76,22 @@ class Orchestrator:
         # We just lock (wait) for all agent tasks is completed.
         # Which is never should happen unless exception is propagated.
 
-        await wait(self._agent_awaited_tasks)
+        try:
+            await wait(self._agent_awaited_tasks)
+        except CancelledError:
+            print("Orchestrator task has been cancelled.")
+            return
 
     async def orchestrator_task(self) -> None:
         prev_requests_done = 0
         while True:
-            print("Perform total calls:", self._perform_counter)
+            print("Perform total calls:", self._executor.stat_perform_calls)
             requests_done = sum(
-                [e_agent.agent.http_requests_done for e_agent in self._executed_agents]
+                [
+                    e_agent.agent.stat_http_requests_done
+                    for e_agent in self._executed_agents
+                    if isinstance(e_agent.agent, BasicAgent)
+                ]
             )
             print("Total HTTP requests: ", requests_done)
             new_requests = requests_done - prev_requests_done
@@ -89,22 +99,3 @@ class Orchestrator:
             prev_requests_done = requests_done
             print("-" * 30)
             await sleep(1)
-
-    async def agent_perform_task(self, agent: AbstractAgent):
-        """Task for async execution of each agent."""
-        try:
-            await agent.bootstrap()
-        except Exception as e:
-            print(e)
-        await sleep(0)
-
-        while True:
-            # We release flow to agent so it can do action defined in him
-            try:
-                await agent.perform()
-            except Exception as e:
-                print(e)
-            # We may not assume that agent will yield execution flow to next agent
-            # so we should yield execution to next one
-            await sleep(0)
-            self._perform_counter += 1

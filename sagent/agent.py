@@ -5,75 +5,32 @@ Agent - is something like worker with described actions that will be performed i
 """
 
 from abc import ABCMeta, abstractmethod
-from contextlib import contextmanager
-from typing import Any, Generator
 
-from aiohttp import ClientResponse, ClientSession
+from .agent_http_mixin import AgentHTTPMixin
 
 
-class _AgentHTTPMixin:
-    """Mixin for abstract agent that implements HTTP calls"""
+class AbstractAgent(metaclass=ABCMeta):
+    """Abstracted agent useful for using custom mixins without default ones.
 
-    _http_requests_done: int = 0
-    _http_requests_pending: int = 0
-    _http_base_url: str | None = None
-
-    @property
-    def http_requests_pending(self) -> int:
-        return self._http_requests_pending
-
-    @property
-    def http_requests_done(self) -> int:
-        return self._http_requests_done
-
-    @property
-    def http_base_url(self) -> str | None:
-        return self._http_base_url
-
-    @http_base_url.setter
-    def http_base_url(self, value: str | None) -> None:
-        self._http_base_url = value
-
-    @contextmanager
-    def _requests_counter_wrapper(self) -> Generator[None, None, None]:
-        try:
-            self._http_requests_pending += 1
-            yield
-        finally:
-            self._http_requests_pending -= 1
-            self._http_requests_done += 1
-
-    async def http(
-        self,
-        url: str,
-        method: str,
-        json: dict[str, Any] | None = None,
-        headers: dict[str, Any] | None = None,
-    ) -> ClientResponse:
-        with self._requests_counter_wrapper():
-            async with ClientSession(base_url=self.http_base_url) as session:
-                async with session.request(
-                    method=method,
-                    url=url,
-                    ssl=False,
-                    json=json,
-                    headers=headers,
-                ) as response:
-                    await response.text()
-                    return response
-
-
-class AbstractAgent(_AgentHTTPMixin, metaclass=ABCMeta):
-    """Abstracted agent specifications that should be inherited to declare actions to be performed"""
+    You can use that class but it's recommended to use `BasicAgent` instead or create own subclass.
+    """
 
     def __init__(self) -> None:
         pass
 
-    async def bootstrap(self) -> None: ...
+    async def bootstrap(self) -> None:
+        """Method that is called when agent is created and should be bootstrapped.
+
+        Override to perform actions you need to be ran only once and before performing actions.
+        """
 
     @abstractmethod
     async def perform(self) -> None:
         """Method that is called when agent should perform actions.
 
-        Override to perform actions you need
+        Override to perform actions you need to be ran every times this agent performs.
         """
+
+
+class BasicAgent(AgentHTTPMixin, AbstractAgent):
+    """Basic agent with HTTP capabilities that should be used by default."""
